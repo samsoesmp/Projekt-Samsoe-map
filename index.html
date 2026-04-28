@@ -22,7 +22,7 @@
   #modal-bg.open { display: flex; }
   #modal { background: #1a1a1a; border-radius: 12px; border: 1px solid #333; padding: 1.25rem 1.5rem; width: 320px; position: relative; }
   #modal h3 { font-size: 15px; font-weight: 500; margin-bottom: 4px; color: #fff; }
-  #modal p { font-size: 13px; color: #888; margin-bottom: 12px; line-height: 1.5; }
+  #modal p { font-size: 13px; color: #888; margin-bottom: 12px; line-height: 1.5; white-space: pre-line; }
   #modal input { width: 100%; font-size: 14px; padding: 6px 10px; border-radius: 8px; border: 1px solid #333; background: #111; color: #eee; margin-bottom: 10px; outline: none; }
   #modal input:focus { border-color: #555; }
   #modal .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -71,18 +71,31 @@
 const SUPABASE_URL = 'https://xzvkkqlgmkptgubhhjpf.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh6dmtrcWxnbWtwdGd1YmhoanBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0MDI5MDksImV4cCI6MjA5Mjk3ODkwOX0.OZoVfNqPGSNSg9ywkXWtGCaFEv7sdw8_EL5elrryUcQ';
 
-const MC_X_MIN = -15382, MC_X_MAX = 12618;
-const MC_Z_MIN = 7040,   MC_Z_MAX = 14040;
-const CELL = 32;
-const COLS = Math.ceil((MC_X_MAX - MC_X_MIN) / CELL);
-const ROWS = Math.ceil((MC_Z_MAX - MC_Z_MIN) / CELL);
-const GEO = { west: 10.50, east: 10.82, south: 55.78, north: 56.00 };
+// Minecraft coordinate bounds
+const MC_X_MIN = -15382, MC_X_MAX = 12618; // 28000 blocks, north-south IRL
+const MC_Z_MIN = 7040,   MC_Z_MAX = 14040;  // 7000 blocks, east-west IRL
+const CELL = 500;
+const COLS = (MC_X_MAX - MC_X_MIN) / CELL; // 56
+const ROWS = (MC_Z_MAX - MC_Z_MIN) / CELL; // 14
 
+// Real-world bounds from user-provided Google Maps coordinates
+// NW corner: 56.003191, 10.513137  →  MC: X_MIN, Z_MIN
+// SE corner: 55.757463, 10.699218  →  MC: X_MAX, Z_MAX
+// IRL north = +X in MC, IRL east = +Z in MC
+const GEO = {
+  north: 56.003191,
+  south: 55.757463,
+  west:  10.513137,
+  east:  10.699218
+};
+
+// MC X increases going IRL north → maps to decreasing latitude
+// MC Z increases going IRL east  → maps to increasing longitude
 function mcToLatLng(mcX, mcZ) {
-  const tx = (mcX - MC_X_MIN) / (MC_X_MAX - MC_X_MIN);
-  const tz = (mcZ - MC_Z_MIN) / (MC_Z_MAX - MC_Z_MIN);
-  const lat = GEO.north - tz * (GEO.north - GEO.south);
-  const lng = GEO.west  + tx * (GEO.east  - GEO.west);
+  const tx = (mcX - MC_X_MIN) / (MC_X_MAX - MC_X_MIN); // 0=south, 1=north IRL
+  const tz = (mcZ - MC_Z_MIN) / (MC_Z_MAX - MC_Z_MIN); // 0=west,  1=east  IRL
+  const lat = GEO.south + tx * (GEO.north - GEO.south);
+  const lng = GEO.west  + tz * (GEO.east  - GEO.west);
   return [lat, lng];
 }
 
@@ -92,17 +105,20 @@ const rectangles = {};
 let filterUser = null;
 let pendingCell = null;
 
-const map = L.map('map', { center: [55.89, 10.66], zoom: 11 });
+const centerLat = (GEO.north + GEO.south) / 2;
+const centerLng = (GEO.west  + GEO.east)  / 2;
+const map = L.map('map', { center: [centerLat, centerLng], zoom: 11 });
+
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
   attribution: 'Tiles &copy; Esri', maxZoom: 17
 }).addTo(map);
 
 function cellColor(claim) {
-  if (!claim) return 'rgba(200,200,200,0.08)';
+  if (!claim) return 'rgba(200,200,200,0.05)';
   const highlight = filterUser && claim.username.toLowerCase() === filterUser.toLowerCase();
-  if (claim.status === 'done')     return highlight ? 'rgba(40,220,80,0.8)'  : 'rgba(60,200,80,0.5)';
-  if (claim.status === 'progress') return highlight ? 'rgba(255,210,0,0.8)'  : 'rgba(255,220,50,0.5)';
-  return 'rgba(200,200,200,0.08)';
+  if (claim.status === 'done')     return highlight ? 'rgba(40,220,80,0.85)'  : 'rgba(60,200,80,0.5)';
+  if (claim.status === 'progress') return highlight ? 'rgba(255,210,0,0.85)'  : 'rgba(255,220,50,0.5)';
+  return 'rgba(200,200,200,0.05)';
 }
 
 function cellKey(col, row) { return `${col}_${row}`; }
@@ -114,12 +130,14 @@ function drawGrid() {
       const mcX1 = mcX0 + CELL;
       const mcZ0 = MC_Z_MIN + row * CELL;
       const mcZ1 = mcZ0 + CELL;
+      // SW corner = low X (south IRL), high Z (east IRL)
+      // NE corner = high X (north IRL), low Z (west IRL)
       const sw = mcToLatLng(mcX0, mcZ1);
       const ne = mcToLatLng(mcX1, mcZ0);
       const key = cellKey(col, row);
       const rect = L.rectangle([sw, ne], {
-        color: 'rgba(255,255,255,0.1)',
-        weight: 0.3,
+        color: 'rgba(255,255,255,0.18)',
+        weight: 0.8,
         fillColor: cellColor(claims[key]),
         fillOpacity: 1
       }).addTo(map);
@@ -159,8 +177,8 @@ function openModal(col, row) {
   const mcZ0 = MC_Z_MIN + row * CELL;
   document.getElementById('modal-title').textContent = `Cell (${col}, ${row})`;
   document.getElementById('modal-desc').textContent = claim
-    ? `Claimed by ${claim.username} — ${claim.status === 'done' ? 'done' : 'in progress'}.\nMC coords: X ${mcX0}–${mcX0+CELL}, Z ${mcZ0}–${mcZ0+CELL}`
-    : `Unclaimed.\nMC coords: X ${mcX0}–${mcX0+CELL}, Z ${mcZ0}–${mcZ0+CELL}`;
+    ? `Claimed by ${claim.username} — ${claim.status === 'done' ? 'done' : 'in progress'}.\nMC coords: X ${mcX0} to ${mcX0+CELL}, Z ${mcZ0} to ${mcZ0+CELL}`
+    : `Unclaimed.\nMC coords: X ${mcX0} to ${mcX0+CELL}, Z ${mcZ0} to ${mcZ0+CELL}`;
   const ui = document.getElementById('modal-username');
   ui.value = document.getElementById('username-input').value || (claim ? claim.username : '');
   document.getElementById('modal-bg').classList.add('open');
