@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SamsøSMP — Build Claim Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: sans-serif; background: #111; color: #eee; display: flex; flex-direction: column; height: 100dvh; padding: 12px; gap: 8px; }
+  h1 { font-size: 16px; font-weight: 500; color: #fff; letter-spacing: 0.02em; }
+  #controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #controls input { flex: 1; min-width: 160px; font-size: 14px; padding: 6px 10px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #eee; outline: none; }
+  #controls input:focus { border-color: #555; }
+  #controls button { font-size: 13px; padding: 6px 14px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #eee; cursor: pointer; white-space: nowrap; }
+  #controls button:hover { background: #252525; }
+  #status-msg { font-size: 13px; color: #888; min-height: 16px; }
+  #map { flex: 1; border-radius: 10px; overflow: hidden; border: 1px solid #333; min-height: 0; }
+  #legend { display: flex; gap: 16px; font-size: 13px; color: #888; align-items: center; flex-wrap: wrap; }
+  .leg { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.2); vertical-align: middle; margin-right: 4px; }
+  #modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 9999; align-items: center; justify-content: center; }
+  #modal-bg.open { display: flex; }
+  #modal { background: #1a1a1a; border-radius: 12px; border: 1px solid #333; padding: 1.25rem 1.5rem; width: 320px; position: relative; }
+  #modal h3 { font-size: 15px; font-weight: 500; margin-bottom: 4px; color: #fff; }
+  #modal p { font-size: 13px; color: #888; margin-bottom: 12px; line-height: 1.5; }
+  #modal input { width: 100%; font-size: 14px; padding: 6px 10px; border-radius: 8px; border: 1px solid #333; background: #111; color: #eee; margin-bottom: 10px; outline: none; }
+  #modal input:focus { border-color: #555; }
+  #modal .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  #modal .btn-row button { flex: 1; font-size: 13px; padding: 7px 10px; border-radius: 8px; border: 1px solid #333; background: #111; color: #eee; cursor: pointer; }
+  #modal .btn-row button:hover { background: #252525; }
+  #modal .close-btn { position: absolute; top: 10px; right: 12px; background: none; border: none; font-size: 20px; cursor: pointer; color: #666; line-height: 1; }
+  #modal .close-btn:hover { color: #aaa; }
+</style>
+</head>
+<body>
+
+<h1>SamsøSMP — Build Claim Map</h1>
+
+<div id="controls">
+  <input id="username-input" placeholder="Your Minecraft username" />
+  <button id="filter-btn">Show my claims</button>
+  <button id="show-all-btn">Show all</button>
+</div>
+
+<div id="status-msg">Loading claims...</div>
+<div id="map"></div>
+
+<div id="legend">
+  <span><span class="leg" style="background:rgba(255,220,50,0.6)"></span>In progress</span>
+  <span><span class="leg" style="background:rgba(60,200,80,0.6)"></span>Done</span>
+  <span><span class="leg" style="background:rgba(200,200,200,0.08)"></span>Unclaimed</span>
+</div>
+
+<div id="modal-bg">
+  <div id="modal">
+    <button class="close-btn" id="close-modal">×</button>
+    <h3 id="modal-title">Cell info</h3>
+    <p id="modal-desc"></p>
+    <input id="modal-username" placeholder="Your Minecraft username" />
+    <div class="btn-row">
+      <button id="btn-claim">Claim</button>
+      <button id="btn-done">Mark done</button>
+      <button id="btn-unclaim">Unclaim</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = 'https://xzvkkqlgmkptgubhhjpf.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh6dmtrcWxnbWtwdGd1YmhoanBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0MDI5MDksImV4cCI6MjA5Mjk3ODkwOX0.OZoVfNqPGSNSg9ywkXWtGCaFEv7sdw8_EL5elrryUcQ';
+
+const MC_X_MIN = -15382, MC_X_MAX = 12618;
+const MC_Z_MIN = 7040,   MC_Z_MAX = 14040;
+const CELL = 32;
+const COLS = Math.ceil((MC_X_MAX - MC_X_MIN) / CELL);
+const ROWS = Math.ceil((MC_Z_MAX - MC_Z_MIN) / CELL);
+const GEO = { west: 10.50, east: 10.82, south: 55.78, north: 56.00 };
+
+function mcToLatLng(mcX, mcZ) {
+  const tx = (mcX - MC_X_MIN) / (MC_X_MAX - MC_X_MIN);
+  const tz = (mcZ - MC_Z_MIN) / (MC_Z_MAX - MC_Z_MIN);
+  const lat = GEO.north - tz * (GEO.north - GEO.south);
+  const lng = GEO.west  + tx * (GEO.east  - GEO.west);
+  return [lat, lng];
+}
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const claims = {};
+const rectangles = {};
+let filterUser = null;
+let pendingCell = null;
+
+const map = L.map('map', { center: [55.89, 10.66], zoom: 11 });
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  attribution: 'Tiles &copy; Esri', maxZoom: 17
+}).addTo(map);
+
+function cellColor(claim) {
+  if (!claim) return 'rgba(200,200,200,0.08)';
+  const highlight = filterUser && claim.username.toLowerCase() === filterUser.toLowerCase();
+  if (claim.status === 'done')     return highlight ? 'rgba(40,220,80,0.8)'  : 'rgba(60,200,80,0.5)';
+  if (claim.status === 'progress') return highlight ? 'rgba(255,210,0,0.8)'  : 'rgba(255,220,50,0.5)';
+  return 'rgba(200,200,200,0.08)';
+}
+
+function cellKey(col, row) { return `${col}_${row}`; }
+
+function drawGrid() {
+  for (let col = 0; col < COLS; col++) {
+    for (let row = 0; row < ROWS; row++) {
+      const mcX0 = MC_X_MIN + col * CELL;
+      const mcX1 = mcX0 + CELL;
+      const mcZ0 = MC_Z_MIN + row * CELL;
+      const mcZ1 = mcZ0 + CELL;
+      const sw = mcToLatLng(mcX0, mcZ1);
+      const ne = mcToLatLng(mcX1, mcZ0);
+      const key = cellKey(col, row);
+      const rect = L.rectangle([sw, ne], {
+        color: 'rgba(255,255,255,0.1)',
+        weight: 0.3,
+        fillColor: cellColor(claims[key]),
+        fillOpacity: 1
+      }).addTo(map);
+      rect.on('click', () => openModal(col, row));
+      rectangles[key] = rect;
+    }
+  }
+}
+
+function refreshColors() {
+  for (const key in rectangles) {
+    rectangles[key].setStyle({ fillColor: cellColor(claims[key]) });
+  }
+}
+
+async function loadClaims() {
+  try {
+    const { data, error } = await sb.from('claims').select('*');
+    if (error) { setStatus('DB error: ' + error.message); drawGrid(); return; }
+    for (const row of data) {
+      claims[row.cell_key] = { username: row.username, status: row.status };
+    }
+    setStatus('');
+  } catch(e) {
+    setStatus('Could not connect to database.');
+  }
+  drawGrid();
+}
+
+function setStatus(msg) { document.getElementById('status-msg').textContent = msg; }
+
+function openModal(col, row) {
+  pendingCell = { col, row };
+  const key = cellKey(col, row);
+  const claim = claims[key];
+  const mcX0 = MC_X_MIN + col * CELL;
+  const mcZ0 = MC_Z_MIN + row * CELL;
+  document.getElementById('modal-title').textContent = `Cell (${col}, ${row})`;
+  document.getElementById('modal-desc').textContent = claim
+    ? `Claimed by ${claim.username} — ${claim.status === 'done' ? 'done' : 'in progress'}.\nMC coords: X ${mcX0}–${mcX0+CELL}, Z ${mcZ0}–${mcZ0+CELL}`
+    : `Unclaimed.\nMC coords: X ${mcX0}–${mcX0+CELL}, Z ${mcZ0}–${mcZ0+CELL}`;
+  const ui = document.getElementById('modal-username');
+  ui.value = document.getElementById('username-input').value || (claim ? claim.username : '');
+  document.getElementById('modal-bg').classList.add('open');
+}
+
+document.getElementById('close-modal').addEventListener('click', () => {
+  document.getElementById('modal-bg').classList.remove('open');
+});
+document.getElementById('modal-bg').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal-bg'))
+    document.getElementById('modal-bg').classList.remove('open');
+});
+
+async function doAction(action) {
+  if (!pendingCell) return;
+  const { col, row } = pendingCell;
+  const key = cellKey(col, row);
+  const username = document.getElementById('modal-username').value.trim();
+  if (!username && action !== 'unclaim') { setStatus('Enter your username first.'); return; }
+  document.getElementById('modal-bg').classList.remove('open');
+
+  if (action === 'unclaim') {
+    const { error } = await sb.from('claims').delete().eq('cell_key', key);
+    if (error) { setStatus('Error: ' + error.message); return; }
+    delete claims[key];
+  } else {
+    const status = action === 'done' ? 'done' : 'progress';
+    const { error } = await sb.from('claims').upsert(
+      { cell_key: key, username, status, updated_at: new Date().toISOString() },
+      { onConflict: 'cell_key' }
+    );
+    if (error) { setStatus('Error: ' + error.message); return; }
+    claims[key] = { username, status };
+  }
+
+  rectangles[key].setStyle({ fillColor: cellColor(claims[key]) });
+  if (username) document.getElementById('username-input').value = username;
+  setStatus('');
+}
+
+document.getElementById('btn-claim').addEventListener('click', () => doAction('progress'));
+document.getElementById('btn-done').addEventListener('click', () => doAction('done'));
+document.getElementById('btn-unclaim').addEventListener('click', () => doAction('unclaim'));
+
+document.getElementById('filter-btn').addEventListener('click', () => {
+  const u = document.getElementById('username-input').value.trim();
+  if (!u) { setStatus('Enter a username to filter.'); return; }
+  filterUser = u;
+  setStatus(`Showing claims for ${u}`);
+  refreshColors();
+});
+
+document.getElementById('show-all-btn').addEventListener('click', () => {
+  filterUser = null;
+  setStatus('');
+  refreshColors();
+});
+
+loadClaims();
+</script>
+</body>
+</html>
