@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SamsøSMP — Højdekort</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: sans-serif; background: #111; color: #eee; display: flex; flex-direction: column; height: 100dvh; padding: 12px; gap: 8px; }
+  h1 { font-size: 16px; font-weight: 500; color: #fff; }
+  #controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #controls button { font-size: 13px; padding: 6px 14px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #eee; cursor: pointer; }
+  #controls button:hover { background: #252525; }
+  #controls button.active { border-color: #888; background: #2a2a2a; }
+  #map { flex: 1; border-radius: 10px; overflow: hidden; border: 1px solid #333; min-height: 0; position: relative; }
+  #legend-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #888; flex-wrap: wrap; }
+  #gradient-bar { height: 14px; width: 220px; border-radius: 4px; background: linear-gradient(to right, #1a3a6b, #2d7a3a, #8ab520, #e8c020, #c84020); border: 1px solid #333; flex-shrink: 0; }
+  #tooltip {
+    display: none;
+    position: fixed;
+    background: rgba(20,20,20,0.92);
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 13px;
+    color: #eee;
+    pointer-events: none;
+    z-index: 8000;
+    white-space: nowrap;
+    line-height: 1.7;
+  }
+  #modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 9999; align-items: center; justify-content: center; }
+  #modal-bg.open { display: flex; }
+  #modal { background: #1a1a1a; border-radius: 12px; border: 1px solid #333; padding: 1.25rem 1.5rem; width: 300px; position: relative; }
+  #modal h3 { font-size: 15px; font-weight: 500; margin-bottom: 8px; color: #fff; }
+  #modal .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; border-bottom: 1px solid #2a2a2a; }
+  #modal .stat:last-child { border-bottom: none; }
+  #modal .stat span:first-child { color: #888; }
+  #modal .stat span:last-child { color: #eee; font-weight: 500; }
+  #modal .close-btn { position: absolute; top: 10px; right: 12px; background: none; border: none; font-size: 20px; cursor: pointer; color: #666; }
+  #modal .close-btn:hover { color: #aaa; }
+</style>
+</head>
+<body>
+
+<h1>SamsøSMP — Højdekort</h1>
+
+<div id="controls">
+  <button id="btn-height" class="active">Højdekort</button>
+  <button id="btn-satellite">Satellit</button>
+  <button id="btn-both">Begge</button>
+</div>
+
+<div id="map"></div>
+<div id="tooltip"></div>
+
+<div id="legend-bar">
+  <span>0m · Y=62</span>
+  <div id="gradient-bar"></div>
+  <span>64m · Y=126</span>
+  <span style="color:#444">|</span>
+  <span>Højde over havniveau → in-game Y</span>
+</div>
+
+<div id="modal-bg">
+  <div id="modal">
+    <button class="close-btn" id="close-modal">×</button>
+    <h3 id="modal-title"></h3>
+    <div id="modal-stats"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const MC_X_MIN = -15382, MC_X_MAX = 12618;
+const MC_Z_MIN = 7040,   MC_Z_MAX = 14040;
+const CELL = 500;
+const COLS = (MC_X_MAX - MC_X_MIN) / CELL;
+const ROWS = (MC_Z_MAX - MC_Z_MIN) / CELL;
+const GEO = { north: 56.003191, south: 55.757463, west: 10.513137, east: 10.699218 };
+const SEA_Y = 62;
+const ELEV = {"0,0": 6, "0,1": 6, "0,2": 7, "0,3": 9, "0,4": 9, "0,5": 10, "0,6": 12, "0,7": 12, "0,8": 11, "0,9": 10, "0,10": 9, "0,11": 8, "0,12": 7, "0,13": 7, "1,0": 6, "1,1": 6, "1,2": 7, "1,3": 8, "1,4": 10, "1,5": 11, "1,6": 12, "1,7": 12, "1,8": 12, "1,9": 10, "1,10": 8, "1,11": 7, "1,12": 7, "1,13": 7, "2,0": 6, "2,1": 7, "2,2": 8, "2,3": 9, "2,4": 10, "2,5": 11, "2,6": 12, "2,7": 13, "2,8": 12, "2,9": 10, "2,10": 8, "2,11": 7, "2,12": 7, "2,13": 6, "3,0": 6, "3,1": 7, "3,2": 8, "3,3": 9, "3,4": 10, "3,5": 11, "3,6": 13, "3,7": 13, "3,8": 12, "3,9": 10, "3,10": 8, "3,11": 7, "3,12": 6, "3,13": 5, "4,0": 5, "4,1": 6, "4,2": 7, "4,3": 9, "4,4": 10, "4,5": 11, "4,6": 12, "4,7": 13, "4,8": 12, "4,9": 10, "4,10": 8, "4,11": 7, "4,12": 6, "4,13": 5, "5,0": 5, "5,1": 5, "5,2": 7, "5,3": 8, "5,4": 10, "5,5": 12, "5,6": 12, "5,7": 12, "5,8": 12, "5,9": 10, "5,10": 8, "5,11": 6, "5,12": 6, "5,13": 5, "6,0": 5, "6,1": 6, "6,2": 7, "6,3": 9, "6,4": 10, "6,5": 12, "6,6": 12, "6,7": 12, "6,8": 11, "6,9": 10, "6,10": 8, "6,11": 6, "6,12": 5, "6,13": 5, "7,0": 5, "7,1": 5, "7,2": 7, "7,3": 9, "7,4": 10, "7,5": 12, "7,6": 12, "7,7": 12, "7,8": 11, "7,9": 10, "7,10": 8, "7,11": 7, "7,12": 6, "7,13": 6, "8,0": 5, "8,1": 5, "8,2": 6, "8,3": 8, "8,4": 10, "8,5": 11, "8,6": 13, "8,7": 12, "8,8": 10, "8,9": 10, "8,10": 9, "8,11": 8, "8,12": 7, "8,13": 7, "9,0": 6, "9,1": 5, "9,2": 6, "9,3": 8, "9,4": 9, "9,5": 11, "9,6": 12, "9,7": 12, "9,8": 11, "9,9": 10, "9,10": 9, "9,11": 8, "9,12": 8, "9,13": 8, "10,0": 7, "10,1": 6, "10,2": 7, "10,3": 9, "10,4": 10, "10,5": 11, "10,6": 12, "10,7": 13, "10,8": 12, "10,9": 11, "10,10": 9, "10,11": 7, "10,12": 7, "10,13": 7, "11,0": 8, "11,1": 9, "11,2": 9, "11,3": 11, "11,4": 12, "11,5": 13, "11,6": 14, "11,7": 15, "11,8": 15, "11,9": 13, "11,10": 11, "11,11": 9, "11,12": 8, "11,13": 8, "12,0": 10, "12,1": 11, "12,2": 12, "12,3": 14, "12,4": 15, "12,5": 15, "12,6": 16, "12,7": 18, "12,8": 18, "12,9": 15, "12,10": 13, "12,11": 11, "12,12": 10, "12,13": 9, "13,0": 11, "13,1": 12, "13,2": 14, "13,3": 16, "13,4": 17, "13,5": 18, "13,6": 20, "13,7": 21, "13,8": 20, "13,9": 17, "13,10": 14, "13,11": 13, "13,12": 11, "13,13": 10, "14,0": 12, "14,1": 12, "14,2": 14, "14,3": 16, "14,4": 18, "14,5": 21, "14,6": 23, "14,7": 24, "14,8": 21, "14,9": 18, "14,10": 15, "14,11": 13, "14,12": 11, "14,13": 10, "15,0": 12, "15,1": 12, "15,2": 14, "15,3": 16, "15,4": 18, "15,5": 21, "15,6": 24, "15,7": 24, "15,8": 22, "15,9": 19, "15,10": 15, "15,11": 13, "15,12": 11, "15,13": 10, "16,0": 11, "16,1": 13, "16,2": 15, "16,3": 17, "16,4": 18, "16,5": 20, "16,6": 22, "16,7": 23, "16,8": 22, "16,9": 19, "16,10": 16, "16,11": 13, "16,12": 11, "16,13": 10, "17,0": 11, "17,1": 12, "17,2": 14, "17,3": 16, "17,4": 17, "17,5": 19, "17,6": 21, "17,7": 21, "17,8": 20, "17,9": 19, "17,10": 16, "17,11": 13, "17,12": 11, "17,13": 11, "18,0": 12, "18,1": 12, "18,2": 14, "18,3": 16, "18,4": 18, "18,5": 19, "18,6": 20, "18,7": 20, "18,8": 19, "18,9": 17, "18,10": 15, "18,11": 13, "18,12": 12, "18,13": 12, "19,0": 12, "19,1": 13, "19,2": 15, "19,3": 18, "19,4": 19, "19,5": 20, "19,6": 21, "19,7": 21, "19,8": 19, "19,9": 17, "19,10": 15, "19,11": 13, "19,12": 12, "19,13": 11, "20,0": 12, "20,1": 13, "20,2": 16, "20,3": 19, "20,4": 21, "20,5": 22, "20,6": 22, "20,7": 21, "20,8": 19, "20,9": 17, "20,10": 15, "20,11": 13, "20,12": 12, "20,13": 10, "21,0": 12, "21,1": 14, "21,2": 18, "21,3": 22, "21,4": 24, "21,5": 25, "21,6": 24, "21,7": 21, "21,8": 19, "21,9": 17, "21,10": 15, "21,11": 13, "21,12": 12, "21,13": 11, "22,0": 13, "22,1": 16, "22,2": 20, "22,3": 24, "22,4": 26, "22,5": 26, "22,6": 24, "22,7": 21, "22,8": 19, "22,9": 17, "22,10": 15, "22,11": 13, "22,12": 12, "22,13": 11, "23,0": 13, "23,1": 16, "23,2": 20, "23,3": 23, "23,4": 25, "23,5": 25, "23,6": 24, "23,7": 22, "23,8": 20, "23,9": 18, "23,10": 15, "23,11": 13, "23,12": 12, "23,13": 11, "24,0": 13, "24,1": 15, "24,2": 19, "24,3": 22, "24,4": 23, "24,5": 25, "24,6": 25, "24,7": 24, "24,8": 23, "24,9": 20, "24,10": 17, "24,11": 15, "24,12": 13, "24,13": 12, "25,0": 14, "25,1": 16, "25,2": 18, "25,3": 21, "25,4": 24, "25,5": 26, "25,6": 27, "25,7": 27, "25,8": 26, "25,9": 24, "25,10": 22, "25,11": 19, "25,12": 16, "25,13": 14, "26,0": 15, "26,1": 17, "26,2": 18, "26,3": 21, "26,4": 24, "26,5": 27, "26,6": 29, "26,7": 31, "26,8": 31, "26,9": 29, "26,10": 25, "26,11": 21, "26,12": 17, "26,13": 14, "27,0": 16, "27,1": 17, "27,2": 19, "27,3": 22, "27,4": 24, "27,5": 27, "27,6": 30, "27,7": 32, "27,8": 33, "27,9": 31, "27,10": 26, "27,11": 20, "27,12": 16, "27,13": 14, "28,0": 15, "28,1": 17, "28,2": 19, "28,3": 22, "28,4": 25, "28,5": 28, "28,6": 32, "28,7": 34, "28,8": 33, "28,9": 30, "28,10": 24, "28,11": 19, "28,12": 15, "28,13": 13, "29,0": 15, "29,1": 16, "29,2": 18, "29,3": 22, "29,4": 26, "29,5": 30, "29,6": 34, "29,7": 36, "29,8": 33, "29,9": 27, "29,10": 22, "29,11": 17, "29,12": 14, "29,13": 12, "30,0": 15, "30,1": 16, "30,2": 19, "30,3": 23, "30,4": 29, "30,5": 35, "30,6": 39, "30,7": 39, "30,8": 34, "30,9": 26, "30,10": 19, "30,11": 15, "30,12": 12, "30,13": 11, "31,0": 16, "31,1": 17, "31,2": 21, "31,3": 27, "31,4": 34, "31,5": 42, "31,6": 45, "31,7": 44, "31,8": 37, "31,9": 27, "31,10": 19, "31,11": 14, "31,12": 12, "31,13": 11, "32,0": 16, "32,1": 18, "32,2": 22, "32,3": 30, "32,4": 40, "32,5": 49, "32,6": 52, "32,7": 50, "32,8": 41, "32,9": 29, "32,10": 20, "32,11": 15, "32,12": 13, "32,13": 11, "33,0": 15, "33,1": 17, "33,2": 23, "33,3": 32, "33,4": 43, "33,5": 53, "33,6": 57, "33,7": 54, "33,8": 44, "33,9": 31, "33,10": 21, "33,11": 16, "33,12": 13, "33,13": 11, "34,0": 16, "34,1": 18, "34,2": 24, "34,3": 33, "34,4": 44, "34,5": 54, "34,6": 59, "34,7": 56, "34,8": 46, "34,9": 32, "34,10": 22, "34,11": 16, "34,12": 13, "34,13": 11, "35,0": 15, "35,1": 18, "35,2": 24, "35,3": 33, "35,4": 43, "35,5": 53, "35,6": 58, "35,7": 56, "35,8": 47, "35,9": 33, "35,10": 23, "35,11": 17, "35,12": 13, "35,13": 10, "36,0": 13, "36,1": 17, "36,2": 23, "36,3": 31, "36,4": 42, "36,5": 52, "36,6": 58, "36,7": 57, "36,8": 48, "36,9": 35, "36,10": 24, "36,11": 17, "36,12": 13, "36,13": 10, "37,0": 14, "37,1": 17, "37,2": 22, "37,3": 31, "37,4": 42, "37,5": 52, "37,6": 59, "37,7": 59, "37,8": 50, "37,9": 36, "37,10": 25, "37,11": 18, "37,12": 13, "37,13": 10, "38,0": 14, "38,1": 17, "38,2": 22, "38,3": 31, "38,4": 43, "38,5": 54, "38,6": 61, "38,7": 61, "38,8": 52, "38,9": 38, "38,10": 25, "38,11": 18, "38,12": 13, "38,13": 10, "39,0": 14, "39,1": 16, "39,2": 23, "39,3": 32, "39,4": 44, "39,5": 56, "39,6": 63, "39,7": 64, "39,8": 55, "39,9": 39, "39,10": 26, "39,11": 18, "39,12": 13, "39,13": 10, "40,0": 14, "40,1": 17, "40,2": 23, "40,3": 33, "40,4": 45, "40,5": 56, "40,6": 64, "40,7": 64, "40,8": 55, "40,9": 40, "40,10": 26, "40,11": 18, "40,12": 13, "40,13": 10, "41,0": 14, "41,1": 17, "41,2": 23, "41,3": 33, "41,4": 44, "41,5": 55, "41,6": 62, "41,7": 62, "41,8": 54, "41,9": 39, "41,10": 27, "41,11": 19, "41,12": 13, "41,13": 10, "42,0": 14, "42,1": 17, "42,2": 22, "42,3": 32, "42,4": 43, "42,5": 52, "42,6": 59, "42,7": 60, "42,8": 51, "42,9": 38, "42,10": 25, "42,11": 17, "42,12": 13, "42,13": 10, "43,0": 14, "43,1": 16, "43,2": 21, "43,3": 30, "43,4": 40, "43,5": 49, "43,6": 55, "43,7": 55, "43,8": 47, "43,9": 35, "43,10": 23, "43,11": 16, "43,12": 12, "43,13": 9, "44,0": 13, "44,1": 15, "44,2": 19, "44,3": 27, "44,4": 37, "44,5": 46, "44,6": 50, "44,7": 49, "44,8": 42, "44,9": 31, "44,10": 21, "44,11": 16, "44,12": 12, "44,13": 9, "45,0": 12, "45,1": 14, "45,2": 17, "45,3": 24, "45,4": 34, "45,5": 42, "45,6": 45, "45,7": 43, "45,8": 36, "45,9": 27, "45,10": 19, "45,11": 15, "45,12": 12, "45,13": 10, "46,0": 10, "46,1": 12, "46,2": 16, "46,3": 23, "46,4": 32, "46,5": 40, "46,6": 42, "46,7": 38, "46,8": 31, "46,9": 23, "46,10": 17, "46,11": 13, "46,12": 11, "46,13": 10, "47,0": 10, "47,1": 11, "47,2": 15, "47,3": 22, "47,4": 31, "47,5": 38, "47,6": 38, "47,7": 33, "47,8": 26, "47,9": 20, "47,10": 14, "47,11": 11, "47,12": 10, "47,13": 9, "48,0": 9, "48,1": 10, "48,2": 14, "48,3": 21, "48,4": 29, "48,5": 34, "48,6": 34, "48,7": 29, "48,8": 23, "48,9": 17, "48,10": 13, "48,11": 10, "48,12": 9, "48,13": 8, "49,0": 9, "49,1": 10, "49,2": 13, "49,3": 18, "49,4": 25, "49,5": 29, "49,6": 30, "49,7": 25, "49,8": 19, "49,9": 14, "49,10": 11, "49,11": 9, "49,12": 8, "49,13": 8, "50,0": 9, "50,1": 9, "50,2": 11, "50,3": 15, "50,4": 21, "50,5": 26, "50,6": 27, "50,7": 24, "50,8": 18, "50,9": 13, "50,10": 10, "50,11": 9, "50,12": 8, "50,13": 8, "51,0": 8, "51,1": 8, "51,2": 10, "51,3": 14, "51,4": 20, "51,5": 25, "51,6": 27, "51,7": 25, "51,8": 18, "51,9": 12, "51,10": 10, "51,11": 9, "51,12": 9, "51,13": 9, "52,0": 7, "52,1": 7, "52,2": 10, "52,3": 14, "52,4": 20, "52,5": 25, "52,6": 28, "52,7": 25, "52,8": 18, "52,9": 13, "52,10": 9, "52,11": 8, "52,12": 9, "52,13": 10, "53,0": 7, "53,1": 8, "53,2": 10, "53,3": 14, "53,4": 20, "53,5": 24, "53,6": 26, "53,7": 23, "53,8": 17, "53,9": 12, "53,10": 9, "53,11": 9, "53,12": 9, "53,13": 10, "54,0": 8, "54,1": 9, "54,2": 11, "54,3": 14, "54,4": 18, "54,5": 21, "54,6": 23, "54,7": 20, "54,8": 16, "54,9": 11, "54,10": 9, "54,11": 9, "54,12": 9, "54,13": 10, "55,0": 10, "55,1": 10, "55,2": 11, "55,3": 13, "55,4": 16, "55,5": 19, "55,6": 20, "55,7": 18, "55,8": 14, "55,9": 10, "55,10": 9, "55,11": 9, "55,12": 9, "55,13": 10};
+
+function mcToLatLng(mcX, mcZ) {
+  const tx = (mcX - MC_X_MIN) / (MC_X_MAX - MC_X_MIN);
+  const tz = (mcZ - MC_Z_MIN) / (MC_Z_MAX - MC_Z_MIN);
+  return [GEO.south + tx*(GEO.north-GEO.south), GEO.west + tz*(GEO.east-GEO.west)];
+}
+
+function elevColor(m) {
+  const stops = [
+    [0,  [26,58,107]], [8,[30,100,130]], [15,[45,140,58]],
+    [25, [138,181,32]], [38,[232,192,32]], [50,[220,120,20]], [65,[200,32,20]]
+  ];
+  let lo = stops[0], hi = stops[stops.length-1];
+  for (let i=0; i<stops.length-1; i++) {
+    if (m >= stops[i][0] && m <= stops[i+1][0]) { lo=stops[i]; hi=stops[i+1]; break; }
+  }
+  const t = Math.max(0, Math.min(1,(m-lo[0])/(hi[0]-lo[0]||1)));
+  const r = Math.round(lo[1][0]+t*(hi[1][0]-lo[1][0]));
+  const g = Math.round(lo[1][1]+t*(hi[1][1]-lo[1][1]));
+  const b = Math.round(lo[1][2]+t*(hi[1][2]-lo[1][2]));
+  return `rgba(${r},${g},${b},0.75)`;
+}
+
+const map = L.map('map', { center: [55.88, 10.61], zoom: 11 });
+
+// Satellite layer — correct Leaflet template syntax
+const satLayer = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  { attribution: 'Tiles &copy; Esri', maxZoom: 17 }
+);
+satLayer.addTo(map);
+
+let showHeight = true;
+const rectangles = {};
+const tooltip = document.getElementById('tooltip');
+
+function cellKey(col, row) { return `${col},${row}`; }
+
+function drawGrid() {
+  for (let col = 0; col < COLS; col++) {
+    for (let row = 0; row < ROWS; row++) {
+      const mcX0 = MC_X_MIN + col * CELL;
+      const mcZ0 = MC_Z_MIN + row * CELL;
+      const sw = mcToLatLng(mcX0, mcZ0 + CELL);
+      const ne = mcToLatLng(mcX0 + CELL, mcZ0);
+      const key = cellKey(col, row);
+      const elev = ELEV[key] ?? 0;
+      const rect = L.rectangle([sw, ne], {
+        color: 'rgba(255,255,255,0.15)',
+        weight: 0.5,
+        fillColor: showHeight ? elevColor(elev) : 'transparent',
+        fillOpacity: showHeight ? 1 : 0
+      }).addTo(map);
+
+      rect.on('mousemove', (e) => {
+        const elev = ELEV[key] ?? 0;
+        const y = SEA_Y + elev;
+        tooltip.style.display = 'block';
+        tooltip.style.left = (e.originalEvent.clientX + 16) + 'px';
+        tooltip.style.top  = (e.originalEvent.clientY - 10) + 'px';
+        tooltip.innerHTML = `<b>Celle (${col}, ${row})</b><br>Højde: ${elev} m over hav<br>In-game Y ≈ ${y}`;
+      });
+      rect.on('mouseout', () => { tooltip.style.display = 'none'; });
+      rect.on('click', () => openModal(col, row));
+      rectangles[key] = rect;
+    }
+  }
+}
+
+function refreshColors() {
+  for (const key in rectangles) {
+    const elev = ELEV[key] ?? 0;
+    rectangles[key].setStyle({
+      fillColor: showHeight ? elevColor(elev) : 'transparent',
+      fillOpacity: showHeight ? 1 : 0
+    });
+  }
+}
+
+function setMode(height, sat) {
+  showHeight = height;
+  if (sat) satLayer.addTo(map); else map.removeLayer(satLayer);
+  refreshColors();
+}
+
+document.getElementById('btn-height').addEventListener('click', () => {
+  setMode(true, false);
+  document.querySelectorAll('#controls button').forEach(b => b.classList.remove('active'));
+  document.getElementById('btn-height').classList.add('active');
+});
+document.getElementById('btn-satellite').addEventListener('click', () => {
+  setMode(false, true);
+  document.querySelectorAll('#controls button').forEach(b => b.classList.remove('active'));
+  document.getElementById('btn-satellite').classList.add('active');
+});
+document.getElementById('btn-both').addEventListener('click', () => {
+  setMode(true, true);
+  document.querySelectorAll('#controls button').forEach(b => b.classList.remove('active'));
+  document.getElementById('btn-both').classList.add('active');
+});
+
+function openModal(col, row) {
+  const key = cellKey(col, row);
+  const elev = ELEV[key] ?? 0;
+  const mcX0 = MC_X_MIN + col * CELL;
+  const mcZ0 = MC_Z_MIN + row * CELL;
+  document.getElementById('modal-title').textContent = `Celle (${col}, ${row})`;
+  document.getElementById('modal-stats').innerHTML = `
+    <div class="stat"><span>Højde over hav</span><span>${elev} m</span></div>
+    <div class="stat"><span>Havniveau Y</span><span>Y = ${SEA_Y}</span></div>
+    <div class="stat"><span>Terræn Y (top)</span><span>Y ≈ ${SEA_Y + elev}</span></div>
+    <div class="stat"><span>Byg fra Y</span><span>Y = ${SEA_Y + elev + 1}</span></div>
+    <div class="stat"><span>MC X-interval</span><span>${mcX0} → ${mcX0+CELL}</span></div>
+    <div class="stat"><span>MC Z-interval</span><span>${mcZ0} → ${mcZ0+CELL}</span></div>
+  `;
+  document.getElementById('modal-bg').classList.add('open');
+}
+
+document.getElementById('close-modal').addEventListener('click', () =>
+  document.getElementById('modal-bg').classList.remove('open'));
+document.getElementById('modal-bg').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal-bg'))
+    document.getElementById('modal-bg').classList.remove('open');
+});
+
+drawGrid();
+</script>
+</body>
+</html>
