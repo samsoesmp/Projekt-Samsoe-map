@@ -69,7 +69,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 const SUPABASE_URL = 'https://xzvkkqlgmkptgubhhjpf.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh6dmtrcWxnbWtwdGd1YmhoanBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0MDI5MDksImV4cCI6MjA5Mjk3ODkwOX0.OZoVfNqPGSNSg9ywkXWtGCaFEv7sdw8_EL5elrryUcQ';
@@ -102,7 +102,7 @@ function mcToLatLng(mcX, mcZ) {
   return [lat, lng];
 }
 
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const claims = {};
 const rectangles = {};
 let filterUser = null;
